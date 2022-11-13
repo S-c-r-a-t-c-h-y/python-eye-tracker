@@ -10,6 +10,8 @@ import screeninfo
 from numpy.polynomial import Polynomial as P
 import cv2
 from ctypes import windll, Structure, c_long, byref
+from keras.models import Sequential
+from keras.layers import Dense
 
 user32 = windll.user32
 
@@ -91,15 +93,58 @@ def create_poly_model(keypoints, y_x, y_y, degree: int=3):
     return x_predict, y_predict
 
 
+def create_NN_model(keypoints, y_values, w, h):
+
+    input_size = (w+h)*2
+    X = [[0]*input_size for _ in range(len(keypoints))]
+    for i in range(len(keypoints)):
+        lx, ly = keypoints[i][0]
+        rx, ry = keypoints[i][1]
+        X[i][lx] = 1
+        X[i][rx+w] = 1
+        X[i][ly+w*2] = 1
+        X[i][ry+w*2+h] = 1
+    X = np.asarray(X)
+    print(X)
+    
+    Y = [[0] * (w + h) for _ in range(len(y_values))]
+    for i in range(len(y_values)):
+        x, y = y_values[0], y_values[1]
+        y[i][x] = 1
+        y[i][y+w] = 1
+    Y = np.asarray(Y)
+    print(Y)
+    
+    # define the keras model
+    model = Sequential()
+    model.add(Dense(12, input_shape=(input_size,), activation='relu'))
+    model.add(Dense(8, activation='relu'))
+    model.add(Dense(w+h, activation='sigmoid'))
+    
+    # compile the keras model
+    model.compile(loss='mean_squared_error', optimizer='adam', metrics=['accuracy'])
+    
+    # fit the keras model on the dataset
+    model.fit(X, Y, epochs=150, batch_size=10)
+    
+    # evaluate the keras model
+    _, accuracy = model.evaluate(X, Y)
+    print('Accuracy: %.2f' % (accuracy*100))
+    
+    return model
+
+
 def query_mouse_position():
     pt = POINT()
     user32.GetCursorPos(byref(pt))
     return pt.x, pt.y
 
 
-keypoints: list[list[tuple[float, float]]] = []
-y_x: list[int] = []
-y_y: list[int] = []
+keypoints: list[list[tuple[float, float]]] = [] # input sample
+y_values: list[tuple[int, int]] = [] # desired output of the neural network
+model = None
+
+_, screen_width, _, screen_height = get_screen_metrics()
 
 while True:
     key = cv2.waitKey(1) & 0xFF
@@ -236,21 +281,25 @@ while True:
             else:
                 pass  # eye is closed
 
-        if len(eye_centers) == 2:
-            if key == ord("p"):
+        if key == ord("p"):
+            if len(eye_centers) == 2:
+                print(eye_centers)
                 if len(keypoints) < NB_KEYPOINTS:
                     keypoints.append(eye_centers)
-                    x, y = query_mouse_position()
-                    y_x.append(x)
-                    y_y.append(y)
-                else:
-                    x_poly, y_poly = create_poly_model(keypoints, y_x, y_y)
-
-                    x = x_poly(complex(eye_centers[0][0], eye_centers[1][0]))
-                    y = y_poly(complex(eye_centers[0][1], eye_centers[1][1]))
-                    print(x, y)
+                    x_mouse, y_mouse = query_mouse_position()
+                    y_values.append((x_mouse, y_mouse))
+                elif not model:
+                    model = create_NN_model(keypoints, y_values, screen_width, screen_height)
+                else: 
+                    X = [[eye_centers[0][0], eye_centers[1][0], eye_centers[0][1], eye_centers[1][1]]]
+                    X = np.asarray(X)
+                    prediction = model.predict(X)
+                    print(prediction)
+                    # print(x, y)
                     # print(query_mouse_position())
-                    user32.SetCursorPos(int(x), int(y))
+                    # user32.SetCursorPos(int(x), int(y))
+            else:
+                print("failed to get keypoints")
 
     cv2.imshow("frame", frame)
     # if the `q` key was pressed, break from the loop
